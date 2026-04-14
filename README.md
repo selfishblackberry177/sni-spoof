@@ -1,8 +1,8 @@
 # sni-spoof
 
-Go port of [@patterniha](https://github.com/patterniha)'s SNI-Spoofing / DPI-bypass TCP forwarder — **his idea, all credit to him**. This is just a faithful Linux reimplementation of the original Windows (WinDivert + Python) tool.
+Go port of [@patterniha](https://github.com/patterniha)'s SNI-Spoofing / DPI-bypass TCP forwarder — **his idea, all credit to him**. This is just a faithful reimplementation of the original Windows (WinDivert + Python) tool.
 
-**Linux only.** Uses `AF_PACKET` raw sockets; needs `CAP_NET_RAW` (run as root).
+**Linux and macOS.** Linux uses `AF_PACKET` raw sockets (`CAP_NET_RAW` / root). macOS uses BPF via `/dev/bpf*` (needs root, or r/w access to a bpf device).
 
 ## How it works
 
@@ -20,6 +20,8 @@ A local TCP forwarder that tricks stateful DPI into whitelisting the flow before
 go build -o sni-spoof .
 sudo ./sni-spoof config.json
 ```
+
+Works on Linux and macOS (amd64 / arm64). On macOS you may need to allow the binary to open `/dev/bpf*` — running under `sudo` is the simplest option.
 
 `config.json`:
 ```json
