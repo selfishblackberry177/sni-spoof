@@ -1,7 +1,7 @@
-//go:build linux
-
 // Go re-implementation of patterniha's SNI-Spoofing / DPI-bypass TCP forwarder.
-// Linux-only. Requires CAP_NET_RAW (run as root).
+//
+// Linux: uses AF_PACKET raw sockets (requires CAP_NET_RAW / root).
+// macOS: uses BPF (/dev/bpf*) — requires root, or r/w access to /dev/bpf*.
 //
 // Faithful port of the Python+WinDivert logic:
 //   * Sniffer captures the outbound SYN (recording ISN) and the outbound
@@ -28,8 +28,6 @@ import (
 	"os"
 	"sync"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 // ---- TLS ClientHello template (517 bytes, extracted from the original exe) ----
@@ -182,18 +180,6 @@ func buildFakeFrame(tpl []byte, isn uint32, fake []byte) []byte {
 	return out
 }
 
-func injectFrame(frame []byte) error {
-	sll := &unix.SockaddrLinklayer{
-		Protocol: htons(unix.ETH_P_IP),
-		Ifindex:  ifaceIdx,
-		Halen:    6,
-	}
-	copy(sll.Addr[:6], frame[0:6])
-	return unix.Sendto(rawFd, frame, 0, sll)
-}
-
-func htons(v uint16) uint16 { return (v<<8)&0xff00 | v>>8 }
-
 // ---- Sniffer: sees ALL TCP packets between localIP and connectIP,
 // injects the fake as soon as the 3rd ACK is seen, and signals
 // handle() when the server's response ACK confirms the fake was ignored. ----
@@ -201,12 +187,9 @@ func htons(v uint16) uint16 { return (v<<8)&0xff00 | v>>8 }
 func sniffLoop() {
 	buf := make([]byte, 65536)
 	for {
-		n, _, err := unix.Recvfrom(rawFd, buf, 0)
+		n, err := recvFrame(buf)
 		if err != nil {
-			if err == unix.EINTR {
-				continue
-			}
-			log.Println("recvfrom:", err)
+			log.Println("recv:", err)
 			continue
 		}
 		if n < 14+20+20 {
@@ -279,7 +262,7 @@ func sniffLoop() {
 				go func() {
 					time.Sleep(1 * time.Millisecond)
 					frame := buildFakeFrame(tplCopy, synSeq, fake)
-					if err := injectFrame(frame); err != nil {
+					if err := sendFrame(frame); err != nil {
 						log.Printf("port=%d inject err: %v", srcPort, err)
 					} else {
 						log.Printf("port=%d: injected fake ClientHello sni=%s seq=%d (ISN=%d)",
@@ -410,17 +393,9 @@ func main() {
 	}
 	localIP, ifaceName, ifaceIdx = getLocalIPAndIface(cfg.ConnectIP)
 
-	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, int(htons(unix.ETH_P_ALL)))
-	if err != nil {
-		log.Fatal("socket AF_PACKET (need CAP_NET_RAW): ", err)
+	if err := openRaw(); err != nil {
+		log.Fatal("open raw socket: ", err)
 	}
-	if err := unix.Bind(fd, &unix.SockaddrLinklayer{
-		Protocol: htons(unix.ETH_P_ALL),
-		Ifindex:  ifaceIdx,
-	}); err != nil {
-		log.Fatal("bind:", err)
-	}
-	rawFd = fd
 
 	log.Printf("iface=%s ifindex=%d local=%s remote=%s:%d listen=%s:%d fake_sni=%s",
 		ifaceName, ifaceIdx, localIP, cfg.ConnectIP, cfg.ConnectPort,
