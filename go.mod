@@ -1,4 +1,4 @@
-module sni-spoof
+module github.com/selfishblackberry177/sni-spoof
 
 go 1.22
 
